@@ -66,6 +66,12 @@ class CheckoutPage {
 
   /** Lê itens e valores do resumo (etapa 2) já convertidos para número. */
   async lerResumo() {
+    // locator.all() não espera: sem isso, em máquina rápida (CI) a leitura
+    // acontece ainda na etapa 1 e devolve lista vazia. Espera a etapa 2
+    // renderizada (o rodapé de totais existe mesmo com carrinho vazio).
+    await this.page.waitForURL('**/checkout-step-two.html');
+    await this.total.waitFor();
+
     const itens = [];
     for (const item of await this.itensResumo.all()) {
       itens.push({

@@ -23,6 +23,8 @@ class InventoryPage {
 
   /** Nomes de todos os produtos exibidos na vitrine. */
   async listarProdutos() {
+    // allTextContents() não espera: garante a vitrine renderizada antes de ler.
+    await this.nomesProdutos.first().waitFor();
     return this.nomesProdutos.allTextContents();
   }
 
