@@ -1,0 +1,312 @@
+===============================================================================
+ CASOS DE TESTE - Teste técnico Coordenador de Qualidade Magazord
+===============================================================================
+
+Convenções
+- ID: o mesmo ID aparece no título do teste automatizado (busca: npx playwright test -g "CT-API-05").
+- Tipo: Positivo | Negativo | Borda | Não funcional.
+- Prioridade: Alta (bloqueia o fluxo/risco de negócio) | Média | Baixa.
+- Casos com "(N variações)" são data-driven: um caso, N execuções.
+
+Resumo
+  Parte 1 - API ............ 15 casos (17 execuções)
+  Parte 2 - E2E ............  9 casos (11 execuções; CT-E2E-06 documenta um defeito do SauceDemo)
+  Parte 3 - Arquivos ....... 11 casos (13 execuções)
+
+Rastreabilidade com o enunciado (itens "Implemente")
+  Parte 1  Headers de rate limit (X-RateLimit-*) ........... CT-API-01 (+ CT-API-02, 03)
+           Detecção do rate limit atingido (403) ........... CT-API-05 (GET /users/github), CT-API-06
+           Login ReqRes -> token -> requisição autenticada . CT-API-07, 09, 11 (ReqRes) e CT-API-12, 13 (DummyJSON)
+           Expiração do token (TTL curto) e tratamento .... CT-API-10 (simulada, 2 min) e CT-API-15 (real, 1 min)
+  Parte 2  Fluxo completo login -> produtos -> checkout ..... CT-E2E-01, 02
+           Dados dinâmicos (nome, sobrenome, CEP) ......... todos os CT-E2E (Faker) + CT-E2E-09
+           Validação da confirmação do pedido ............. CT-E2E-01, 02
+           Limpeza após cada teste (cookies, storage) ..... afterEach em todos + CT-E2E-08
+  Parte 3  Gerador de CSV 10/100/1000 linhas ............... CT-ARQ-01 (3 variações), CT-ARQ-10
+           Upload de arquivo válido ........................ CT-ARQ-01, 02
+           Upload inválido: vazio / formato / malformado ... CT-ARQ-03, 05, 06 (+ 04, 07, 08)
+           Validação de upload bem-sucedido ............... CT-ARQ-01, 02 (mensagem + download + SHA-256)
+
+
+===============================================================================
+ PARTE 1 - API  (parte1-api/questao1.1/testes/api.spec.js)
+===============================================================================
+
+--- GitHub API: rate limiting -------------------------------------------------
+
+CT-API-01 | Headers de rate limit presentes e consistentes
+  Tipo/Prioridade: Positivo / Alta
+  Passos: GET https://api.github.com/users/github
+  Esperado:
+    - X-RateLimit-Limit = 60 sem token (> 60 com GITHUB_TOKEN: 5000 PAT, 1000 GitHub Actions)
+    - X-RateLimit-Resource = core
+    - 0 <= X-RateLimit-Remaining < Limit e Used + Remaining = Limit
+    - X-RateLimit-Reset é epoch (s) no futuro, no máximo 1 h à frente
+    - com cota disponível: 200 e body.login = "github"
+    - com cota já esgotada (ex.: CT-API-05 de execução anterior na mesma hora): 403 com
+      os mesmos headers e Remaining = 0 (os headers são obrigatórios também no bloqueio)
+
+CT-API-02 | Remaining decrementa 1 por requisição
+  Tipo/Prioridade: Positivo / Média
+  Pré-condição: cota de busca >= 2; se estiver abaixo, o teste espera o reset
+                informado pela API (até 60 s) em vez de ser pulado.
+  Passos: duas chamadas seguidas a /search/users (a cota core pode estar esgotada pelo CT-API-05).
+  Esperado: remaining(2) = remaining(1) - 1 e used(2) = used(1) + 1.
+            Se a janela reiniciar entre as chamadas (reset diferente), remaining(2) = limit - 1.
+
+CT-API-03 | GET /rate_limit informa a cota sem consumi-la
+  Tipo/Prioridade: Positivo / Baixa
+  Passos: duas chamadas a /rate_limit.
+  Esperado: "used" de core e search não muda entre as chamadas (mesma janela).
+
+CT-API-04 | Token inválido é rejeitado (não cai para anônimo)
+  Tipo/Prioridade: Negativo / Média
+  Passos: GET /users/github com "Authorization: Bearer token-invalido".
+  Esperado: 401, message = "Bad credentials".
+
+CT-API-05 | GET /users/github: exceder o limite retorna 403
+  Tipo/Prioridade: Negativo / Alta
+  Passos: requisições anônimas sequenciais a /users/github até ser bloqueado
+          (anônimo mesmo com GITHUB_TOKEN; máximo = remaining + 5 requisições).
+  Esperado:
+    - Última resposta 403, Limit = 60, Remaining = 0, Resource = core, Reset no futuro
+    - body.message contém "rate limit exceeded" e documentation_url aponta para docs.github.com
+    - Se havia cota no início: todas as anteriores foram 200 e o bloqueio veio
+      exatamente na requisição remaining+2
+  Efeito colateral: a cota anônima do IP fica esgotada até o reset (até 1 h).
+  O teste é idempotente: com a cota já esgotada, a 1ª resposta já é o 403.
+  Execução: roda no "npm test". Tem a tag @esgota-cota: o CI de push/PR roda
+  "npm run test:ci" (sem ele, porque os runners compartilham IP) e o job
+  agendado/manual roda a suíte completa.
+
+CT-API-06 | Recuperação após o reset
+  Tipo/Prioridade: Positivo / Média
+  Passos: esgotar a cota de busca (10/min, reinicia a cada minuto); esperar até
+          X-RateLimit-Reset (ou Retry-After); repetir a chamada.
+  Esperado: bloqueio 403 com Remaining = 0 e Resource = search; espera <= 65 s;
+            depois do reset a API volta a responder 200.
+
+--- ReqRes: login e cache de token --------------------------------------------
+Pré-condição comum (CT-API-07 a 11): cota anônima do ReqRes disponível
+(40 req/dia por IP; a suíte usa ~10). Se o ReqRes responder 429
+rate_limit_exceeded, o teste é PULADO com o motivo e o horário de reset
+(condição do ambiente, não defeito). REQRES_API_KEY (conta gratuita) amplia a cota.
+
+CT-API-07 | Login válido retorna token
+  Tipo/Prioridade: Positivo / Alta
+  Passos: POST /api/login {eve.holt@reqres.in / cityslicka}
+  Esperado: 200, token alfanumérico com 10+ caracteres.
+
+CT-API-08 | Login inválido retorna 400 sem token (3 variações)
+  Tipo/Prioridade: Negativo / Alta
+  Variações e erro esperado:
+    a) sem senha ............. "Missing password"
+    b) sem e-mail ............ "Missing email or username"
+    c) usuário inexistente ... "user not found"
+  Esperado: 400, body.error conforme variação, sem campo token.
+
+CT-API-09 | Token é obtido uma vez e reutilizado
+  Tipo/Prioridade: Positivo / Alta
+  Passos: TokenManager.getToken() 3 vezes.
+  Esperado: 1 login apenas; os 3 tokens são iguais.
+
+CT-API-10 | Expiração simulada (TTL 2 min) detectada e tratada
+  Tipo/Prioridade: Borda / Alta
+  Passos: login; avançar relógio injetado para TTL-1ms e depois TTL.
+  Esperado:
+    - TTL-1ms: token válido (assertValid devolve o token)
+    - TTL: isExpired = true e assertValid lança TokenExpiredError
+    - próximo getToken renova (2 logins) e o token volta a ser válido
+
+CT-API-11 | Fluxo do enunciado no ReqRes: token Bearer em GET /api/users/2
+  Tipo/Prioridade: Negativo (contrato) / Alta
+  Passos: login -> token -> GET /api/users/2 com "Authorization: Bearer {token}";
+          depois o mesmo GET sem token.
+  Esperado (contrato atual, verificado em 29/10/2026):
+    - com Bearer: 401, error = "missing_api_key", hint citando Bearer
+      (o ReqRes reserva Bearer para /app/*, com sessão por magic link, e exige x-api-key em /api/*)
+    - sem token: 200 e data.id = 2: o token do login não autentica nada no ReqRes
+  Consequência: o reuso do token em requisição autenticada é coberto com o
+  DummyJSON (CT-API-12 a 15); o enunciado permite trocar de API.
+
+--- DummyJSON: login, reuso do token e expiração real -------------------------
+
+CT-API-12 | Login obtém o token e o reutiliza em requisição autenticada
+  Tipo/Prioridade: Positivo / Alta
+  Passos: login (fixture de worker) -> GET /auth/me com Bearer -> segundo GET /auth/me com o mesmo token.
+  Esperado: 200 nas duas chamadas, username = "emilys", 1 login apenas.
+
+CT-API-13 | Outro teste reaproveita o mesmo token
+  Tipo/Prioridade: Positivo / Alta
+  Passos: GET /auth/products/1 com a mesma sessão.
+  Esperado: 200, id = 1, contador de login continua 1 (sem login por teste).
+
+CT-API-14 | Sem token / token inválido
+  Tipo/Prioridade: Negativo / Alta
+  Esperado: sem token: 401 "Access Token is required";
+            token inválido: 401 "Invalid/Expired Token!" (reconhecido pelo helper como rejeitado).
+
+CT-API-15 | Token de 1 min expira no servidor, é detectado e renovado
+  Tipo/Prioridade: Borda / Alta
+  Passos: login com expiresInMins=1; chamada OK; esperar até o exp do JWT.
+  Esperado:
+    - servidor responde 401 "Token Expired!" (distinto de token inválido)
+    - detecção reativa: cliente que ainda acha o token válido recebe 401, invalida,
+      faz novo login e repete UMA vez com sucesso (200)
+    - detecção proativa: TokenManager com relógio correto renova sem tomar 401
+
+
+===============================================================================
+ PARTE 2 - E2E  (parte2-e2e/questao2.1/testes/checkout-flow.spec.js)
+===============================================================================
+Massa: comprador (nome, sobrenome, CEP) e produtos sorteados com Faker pt_BR.
+       A semente é anotada no relatório; FAKER_SEED=<semente> reproduz a execução.
+Limpeza: após cada teste, cookies + localStorage + sessionStorage são apagados.
+
+CT-E2E-01 | Fluxo completo com 1 produto até a confirmação
+  Tipo/Prioridade: Positivo / Alta
+  Passos: login standard_user -> adiciona produto sorteado -> carrinho -> checkout ->
+          dados gerados -> continue -> finish -> back home -> carrinho
+  Esperado:
+    - badge do carrinho = 1; carrinho lista o produto
+    - títulos das etapas: Your Information -> Overview -> Complete!
+    - URL /checkout-complete.html; "Thank you for your order!"; texto "Your order has been dispatched"
+    - badge some e o carrinho fica vazio após o pedido
+
+CT-E2E-02 | Múltiplos produtos: itens, preços, taxa e total
+  Tipo/Prioridade: Positivo / Alta
+  Passos: adiciona 3 produtos sorteados e segue até o resumo.
+  Esperado:
+    - itens e preços do resumo = itens e preços vistos na vitrine; quantidade 1 cada
+    - Item total = soma dos preços
+    - Tax = 8% do subtotal (tolerância de arredondamento de meio centavo)
+    - Total = Item total + Tax
+    - pagamento "SauceCard #<n>" e entrega "Free Pony Express Delivery!"
+    - finalizar mostra a confirmação
+
+CT-E2E-03 | Campo obrigatório ausente bloqueia o checkout (3 variações)
+  Tipo/Prioridade: Negativo / Alta
+  Variações: sem nome / sem sobrenome / sem CEP
+  Esperado: mensagem "Error: <Campo> is required" e permanência na etapa 1;
+            após preencher o campo, o fluxo avança para o resumo (recuperação).
+
+CT-E2E-04 | Item removido não aparece no resumo nem no total
+  Tipo/Prioridade: Positivo / Média
+  Passos: adiciona 2 produtos; remove 1 no carrinho; segue até o resumo.
+  Esperado: badge = 1; resumo só com o item mantido; subtotal = preço do item mantido.
+
+CT-E2E-05 | Cancelar no resumo mantém o carrinho
+  Tipo/Prioridade: Positivo / Média
+  Esperado: volta para /inventory.html com badge = 2.
+
+CT-E2E-06 | [DEFEITO] Checkout com carrinho vazio não é bloqueado
+  Tipo/Prioridade: Negativo / Alta
+  Esperado (regra de negócio): não chegar ao resumo nem finalizar pedido sem itens.
+  Resultado atual (defeito): o SauceDemo chega ao resumo com 0 itens e Total $0.00
+  e finaliza o pedido ("Thank you for your order!").
+  Automação: teste de caracterização. Afirma exatamente o comportamento atual,
+  com anotação "defeito" no relatório. Quando o defeito for corrigido, o teste
+  falha e deve ser invertido para a regra esperada. (Não usei test.fail()
+  porque ele aceitaria qualquer falha, inclusive um seletor quebrado.)
+
+CT-E2E-07 | Acesso direto ao checkout sem login
+  Tipo/Prioridade: Negativo / Alta
+  Passos: abrir /checkout-step-one.html sem sessão.
+  Esperado: tela de login com "Epic sadface: You can only access '/checkout-step-one.html' when you are logged in."
+
+CT-E2E-08 | Limpeza de estado encerra a sessão
+  Tipo/Prioridade: Positivo / Média
+  Passos: login + produto no carrinho; executar a limpeza; abrir /inventory.html.
+  Esperado: antes: cookie session-username e localStorage cart-contents presentes;
+            depois: sem cookies e storages vazios; área logada exige login.
+
+CT-E2E-09 | Massa de dados dinâmica e reproduzível
+  Tipo/Prioridade: Positivo / Baixa
+  Esperado: mesma semente gera o mesmo comprador; semente diferente gera outro;
+            nome/sobrenome não vazios; CEP no formato 00000-000.
+
+
+===============================================================================
+ PARTE 3 - ARQUIVOS  (parte3-arquivos/questao3.1/testes/csv-upload.spec.js)
+===============================================================================
+Regras do importador (utils/csv-validator.js):
+  Formato: UTF-8, não vazio, cabeçalho exato "nome,email,idade,cidade", 4 colunas, aspas balanceadas
+  Negócio: nome obrigatório; e-mail válido; idade inteira de 0 a 120
+  Duplicata: e-mail único no arquivo (sem diferenciar maiúsculas)
+  Relacionamento: cidade deve existir no cadastro de referência
+Integridade: após o upload, o arquivo é baixado de /download/<nome> e comparado por SHA-256.
+
+CT-ARQ-01 | CSV gerado é enviado e armazenado íntegro (3 variações: 10, 100, 1000 linhas)
+  Tipo/Prioridade: Positivo / Alta
+  Esperado: pré-validação sem erros e com N registros; upload 200, "File Uploaded!" e nome exibido;
+            arquivo baixado com mesmo tamanho e SHA-256; revalidação com N registros válidos.
+
+CT-ARQ-02 | CSV de exemplo com casos de borda é aceito
+  Tipo/Prioridade: Borda / Média
+  Dados: nome com vírgula entre aspas, aspas escapadas (""), acentos, idades 0 e 120.
+  Esperado: 10 registros válidos; upload íntegro.
+
+CT-ARQ-03 a 07: IMPORTANTE: a rejeição é validada por um COMPONENTE LOCAL
+(utils/csv-validator.js, no papel do importador), não pelo servidor: o
+the-internet aceita qualquer arquivo e não tem importador. Cada teste tem duas
+etapas (test.step) no relatório:
+  1) Upload: o site aceita e grava o arquivo íntegro (SHA-256 do download = enviado);
+  2) Validador local: rejeita com os erros e linhas abaixo.
+
+CT-ARQ-03 | CSV vazio (0 bytes)
+  Tipo/Prioridade: Negativo / Alta
+  Esperado: erro ARQUIVO_VAZIO.
+
+CT-ARQ-04 | CSV só com cabeçalho
+  Tipo/Prioridade: Borda / Média
+  Esperado: erro SEM_REGISTROS (linha 1).
+
+CT-ARQ-05 | Formato incorreto (separador ";" e cabeçalho diferente)
+  Tipo/Prioridade: Negativo / Alta
+  Esperado: erro CABECALHO_INVALIDO (linha 1), com dica do separador.
+
+CT-ARQ-06 | Dados malformados
+  Tipo/Prioridade: Negativo / Alta
+  Esperado (linha -> erro):
+    3 COLUNAS | 4 EMAIL_INVALIDO | 5 IDADE_INVALIDA ("abc") | 6 IDADE_INVALIDA (-3)
+    7 NOME_OBRIGATORIO | 8 EMAIL_DUPLICADO (maiúsculas) | 9 CIDADE_INEXISTENTE
+    10 ASPAS_NAO_FECHADAS
+  Linha 2 é válida e não gera erro.
+
+CT-ARQ-07 | CSV corrompido (binário)
+  Tipo/Prioridade: Negativo / Alta
+  Esperado: erro ENCODING_INVALIDO; nenhuma tentativa de interpretar linhas.
+
+CT-ARQ-08 | Envio sem arquivo
+  Tipo/Prioridade: Negativo / Média
+  Esperado: HTTP 500, "Internal Server Error" e "No file was chosen".
+
+CT-ARQ-09 | Defeitos injetados em 1000 linhas são localizados
+  Tipo/Prioridade: Borda / Alta
+  Defeitos: registros 1 (nome), 250 (e-mail), 500 (idade), 734 (cidade), 1000 (duplicado).
+  Esperado: erros exatamente nas linhas 2, 251, 501, 735, 1001; 995 registros válidos.
+
+CT-ARQ-10 | Gerador: quantidade, unicidade e reprodutibilidade
+  Tipo/Prioridade: Positivo / Média
+  Esperado: 1000 registros, 1000 e-mails distintos; mesma semente = mesmo conteúdo; semente diferente = conteúdo diferente.
+
+CT-ARQ-11 | Round-trip de campos especiais
+  Tipo/Prioridade: Borda / Média
+  Dados: nome com vírgula, aspas e quebra de linha.
+  Esperado: parser devolve o valor original e o arquivo é válido.
+
+
+===============================================================================
+ CENÁRIOS IDENTIFICADOS E NÃO AUTOMATIZADOS (com justificativa)
+===============================================================================
+- Cupom de desconto de uso único (Parte 2): o SauceDemo não tem cupom. Estratégia
+  e casos descritos em parte2-e2e/questao2.1/RESPOSTA_TEORICA.md (2.1.a).
+- E-mail de confirmação (Parte 2): o SauceDemo não envia e-mail. Abordagem em 2.1.b.
+- Validação de conteúdo dos campos do checkout (só espaços, CEP em formato inválido,
+  tamanho máximo): o SauceDemo só checa campo vazio; as regras esperadas precisam
+  ser definidas com o PO antes de virarem teste.
+- Outros usuários do SauceDemo (problem_user, performance_glitch_user, error_user):
+  bons candidatos para testes de regressão visual e de performance, fora do escopo pedido.
+- Concorrência no rate limit (N requisições simultâneas): pertence a teste de carga (k6), não à suíte funcional.
+- Arquivo acima do tamanho máximo e CSV injection (=HYPERLINK...): o the-internet
+  não tem limite nem processamento; descritos em 3.1.b.
