@@ -160,6 +160,7 @@ Preferi isso a `test.fail()`, porque o `test.fail()` aceita *qualquer* falha com
 
 ### Dificuldades encontradas
 
+- **Limite de 260 caracteres de caminho no Windows:** no teste de "máquina limpa" (clone numa pasta funda), o arquivo CSV gerado em `test-results/...` ficou com mais de 260 caracteres. O Chromium não consegue ler esse arquivo, e o upload travava até o timeout. O arquivo de upload passou a ser gerado num diretório temporário curto (com cópia anexada ao relatório), e o Page Object falha cedo com a causa real se o caminho passar do limite.
 - **Mudança de contrato do ReqRes** (descrita acima): o fluxo do enunciado, `Bearer` em `/api/users/2`, hoje retorna 401. Foi identificada antes da implementação, sondando a API.
 - **Dependência de serviços públicos:** GitHub, ReqRes, DummyJSON, SauceDemo e the-internet podem ficar instáveis ou aplicar limites (a cota anônima do ReqRes é de 40 requisições por dia por IP). No CI uso `retries: 1` e publico trace e relatório para diagnóstico. Numa suíte de produto, esses serviços seriam substituídos por mocks na maior parte dos testes (ver Parte 5).
 - **Vulnerabilidade no Faker 9** (GHSA-qxc2-j82w-r537, em `helpers.fake`): mesmo sem usar essa função, atualizei para o Faker 10.6 para o `npm install` sair limpo (`found 0 vulnerabilities`). O Faker 10 é distribuído só como ESM, então o Node mínimo é 20.19. O `.npmrc` (`engine-strict=true`) faz o `npm install` falhar com mensagem clara em versões anteriores. Validado no Node 22 (versão do CI) e no 26.

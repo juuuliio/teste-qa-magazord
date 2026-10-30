@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { test: base, expect } = require('@playwright/test');
 const { UploadPage } = require('./pages/upload-page');
@@ -21,19 +22,28 @@ const test = base.extend({
  * @param {import('@playwright/test').TestInfo} testInfo
  */
 async function enviarEConferirIntegridade(uploadPage, conteudo, nome, testInfo) {
-  const caminho = salvarCsv(conteudo, testInfo.outputPath(nome));
+  // O arquivo a enviar fica num diretório temporário curto, não em test-results:
+  // no Windows, com o projeto numa pasta funda, o caminho em test-results passa
+  // de 260 caracteres e o Chromium não consegue ler o arquivo (o upload trava).
+  // Uma cópia vai anexada ao relatório como evidência.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-csv-'));
+  const caminho = salvarCsv(conteudo, path.join(dir, nome));
+  try {
+    await uploadPage.goto();
+    const response = await uploadPage.enviar(caminho);
 
-  await uploadPage.goto();
-  const response = await uploadPage.enviar(caminho);
+    expect(response.status()).toBe(200);
+    await expect(uploadPage.titulo).toHaveText('File Uploaded!');
+    await expect(uploadPage.arquivosEnviados).toHaveText(nome);
 
-  expect(response.status()).toBe(200);
-  await expect(uploadPage.titulo).toHaveText('File Uploaded!');
-  await expect(uploadPage.arquivosEnviados).toHaveText(nome);
-
-  const armazenado = await uploadPage.baixarArquivoEnviado(nome);
-  expect(armazenado.length).toBe(Buffer.byteLength(conteudo));
-  expect(sha256(armazenado)).toBe(sha256(conteudo));
-  return armazenado;
+    const armazenado = await uploadPage.baixarArquivoEnviado(nome);
+    expect(armazenado.length).toBe(Buffer.byteLength(conteudo));
+    expect(sha256(armazenado)).toBe(sha256(conteudo));
+    return armazenado;
+  } finally {
+    await testInfo.attach(nome, { path: caminho, contentType: 'text/csv' });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test.describe('Upload de CSV válido', () => {

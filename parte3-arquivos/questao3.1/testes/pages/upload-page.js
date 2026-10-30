@@ -1,3 +1,5 @@
+const path = require('node:path');
+
 /** File Uploader do the-internet (/upload) e o download do arquivo gravado. */
 class UploadPage {
   /** @param {import('@playwright/test').Page} page */
@@ -20,9 +22,19 @@ class UploadPage {
    * @param {string | undefined} caminho  undefined = envia o formulário sem arquivo
    */
   async enviar(caminho) {
-    if (caminho !== undefined) await this.inputArquivo.setInputFiles(caminho);
+    if (caminho !== undefined) {
+      // No Windows o Chromium não lê arquivos com caminho >= 260 caracteres e o
+      // envio fica pendurado sem erro. Falha cedo com a causa real.
+      const absoluto = path.resolve(caminho);
+      if (process.platform === 'win32' && absoluto.length >= 260) {
+        throw new Error(`Caminho do arquivo com ${absoluto.length} caracteres (limite 259 no Windows): ${absoluto}`);
+      }
+      await this.inputArquivo.setInputFiles(absoluto);
+    }
     const [response] = await Promise.all([
-      this.page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/upload'),
+      this.page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/upload', {
+        timeout: 30_000,
+      }),
       this.botaoEnviar.click(),
     ]);
     return response;
