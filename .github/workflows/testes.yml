@@ -1,0 +1,49 @@
+name: testes
+
+# push / pull_request: suíte sem o teste que esgota a cota anônima real do GitHub
+#   (@esgota-cota): os runners compartilham IP e o bloqueio duraria até 1h.
+# schedule / workflow_dispatch: suíte completa (npm test), incluindo o CT-API-05.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * *' # diário, 03:00 em Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUITE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'test' || 'test:ci' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # O postinstall já baixa o Chromium do Playwright.
+      - run: npm ci
+
+      - name: Dependências de sistema do Chromium
+        run: npx playwright install-deps chromium
+
+      - name: Testes (npm run ${{ env.SUITE }})
+        run: npm run "$SUITE"
+        env:
+          # Runners compartilham IP: sem token, a cota anônima do GitHub (60/h) costuma estar esgotada.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Opcional: chave de conta gratuita do ReqRes (cota anônima é de 40 req/dia por IP).
+          REQRES_API_KEY: ${{ secrets.REQRES_API_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14

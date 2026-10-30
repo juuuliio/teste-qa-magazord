@@ -1,0 +1,25 @@
+{
+  "name": "teste-qa-magazord",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Teste técnico - Coordenador de Qualidade Magazord (Playwright)",
+  "scripts": {
+    "postinstall": "playwright install chromium",
+    "test": "playwright test",
+    "test:ci": "playwright test --grep-invert @esgota-cota",
+    "test:parte1": "playwright test --project=parte1-api",
+    "test:parte2": "playwright test --project=parte2-e2e",
+    "test:parte3": "playwright test --project=parte3-arquivos",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@playwright/test": "^1.64.1",
+    "dotenv": "^16.4.5"
+  }
+}
