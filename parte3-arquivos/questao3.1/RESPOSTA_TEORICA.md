@@ -1,6 +1,11 @@
 # Questão 3.1 - Importação de CSV
 
-Implementação: [`testes/csv-upload.spec.js`](testes/csv-upload.spec.js), gerador em [`testes/utils/csv-generator.js`](testes/utils/csv-generator.js), validador em [`testes/utils/csv-validator.js`](testes/utils/csv-validator.js) e exemplos em [`testes/fixtures/`](testes/fixtures/).
+Implementação:
+- **upload no the-internet:** [`testes/csv-upload.spec.js`](testes/csv-upload.spec.js);
+- **importação de ponta a ponta no importador de referência** ([`importador/`](importador/)): [`testes/csv-importacao.spec.js`](testes/csv-importacao.spec.js);
+- **gerador:** [`testes/utils/csv-generator.js`](testes/utils/csv-generator.js);
+- **regras de importação:** [`importador/csv-validator.js`](importador/csv-validator.js);
+- **exemplos de arquivo:** [`testes/fixtures/`](testes/fixtures/).
 
 ---
 
@@ -15,7 +20,9 @@ Implementação: [`testes/csv-upload.spec.js`](testes/csv-upload.spec.js), gerad
 5. **Idempotência:** reimportar o mesmo arquivo não pode duplicar registros (ou precisa seguir a regra definida: atualizar, ignorar ou rejeitar).
 6. **Processamento assíncrono:** importações grandes costumam ser jobs. Faço polling do status com timeout (`expect.poll`) até `CONCLUIDO`, e valido também que não há job "pendurado" e que o tempo fica dentro do SLA.
 
-**No teste prático** (o the-internet só armazena o arquivo, não importa): o arquivo é gerado com N linhas conhecidas e pré-validado (0 erros, N registros). Depois do upload, faço download do arquivo **gravado pelo servidor** em `/download/<nome>`, comparo o SHA-256 byte a byte e revalido: os mesmos N registros, todos válidos. Os nomes de arquivo são únicos por execução, porque o servidor é compartilhado.
+**No teste prático:**
+- **the-internet**, que só armazena o arquivo: o arquivo é gerado com N linhas conhecidas e pré-validado (0 erros, N registros). Depois do upload, faço download do arquivo **gravado pelo servidor** em `/download/<nome>`, comparo o SHA-256 byte a byte e revalido: os mesmos N registros, todos válidos. Os nomes de arquivo são únicos por execução, porque o servidor é compartilhado.
+- **importador de referência**, que importa de verdade (CT-ARQ-12): as 1000 linhas são importadas pela tela, e a base é consultada pela API e comparada **campo a campo, por chave**, com os registros gerados. São os itens 1 a 3 acima, aplicados de fato. A reimportação (item 5, idempotência) é o CT-ARQ-15.
 
 ## 3.1.b) Testar cenários de erro (arquivo corrompido, dados inválidos)
 
@@ -40,4 +47,14 @@ Pontos que considero essenciais:
 - **Fixtures estáticas versionadas** (`fixtures/*.csv`) para os casos clássicos: legíveis na revisão de código e estáveis. O `corrompido.csv` tem um cabeçalho legível seguido de bytes binários (assinatura PNG, byte nulo, sequências UTF-8 inválidas). O `.gitattributes` marca as fixtures como `-text` para o Git não converter quebras de linha.
 - **Gerador dinâmico** para volume (10/100/1000 linhas) e para injetar defeitos em posições escolhidas, com semente reproduzível.
 
-**Limitação do site de teste:** o the-internet aceita qualquer arquivo; o único erro do lado do servidor é o envio sem arquivo (HTTP 500, coberto pelo CT-ARQ-08). Por isso as regras de importação ficam no `csv-validator.js`, que faz o papel do importador. Para os arquivos inválidos, o teste verifica os erros apontados pelo validador **e** que o arquivo chegou íntegro ao servidor, o que garante que o mesmo erro seria reproduzido no destino. Em um sistema real, a asserção de rejeição seria feita na resposta e no relatório do próprio importador.
+**Site de teste e importador:** o the-internet aceita qualquer arquivo; o único erro do lado do servidor é o envio sem arquivo (HTTP 500, coberto pelo CT-ARQ-08). Para os arquivos inválidos, os testes nele verificam que o arquivo chega íntegro e que as regras de importação apontam erro e linha.
+
+Para testar a **rejeição feita pelo servidor**, como num sistema real, o projeto inclui um importador de referência (`importador/server.js`, Node sem dependências, iniciado pelo Playwright). Com os mesmos arquivos inválidos, o CT-ARQ-13 verifica:
+- **HTTP 422** com erro e linha;
+- **tabela de erros** na tela;
+- **base sem nenhum registro gravado** (política tudo ou nada).
+
+Também cobre, com o importador:
+- um único erro em 1000 linhas rejeitando o arquivo inteiro (CT-ARQ-14);
+- reimportação do mesmo arquivo (CT-ARQ-15);
+- arquivo acima do limite, com HTTP 413 (CT-ARQ-16).

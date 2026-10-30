@@ -1,8 +1,9 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { fakerPT_BR: faker } = require('@faker-js/faker');
-const { CABECALHO, CIDADES_CADASTRADAS } = require('./csv-validator');
+const { CABECALHO, CIDADES_CADASTRADAS } = require('../../importador/csv-validator');
 
 /** Escapa um campo conforme RFC 4180: aspas quando houver vírgula, aspas ou quebra de linha. */
 function escaparCampo(valor) {
@@ -83,6 +84,19 @@ function salvarCsv(conteudo, caminho) {
   return caminho;
 }
 
+/**
+ * Grava o arquivo a enviar num diretório temporário de caminho curto. No
+ * Windows, com o projeto numa pasta funda, o caminho em test-results passa de
+ * 260 caracteres e o Chromium não consegue ler o arquivo (o upload trava).
+ *
+ * @returns {{ caminho: string, remover: () => void }}
+ */
+function arquivoTemporario(conteudo, nome) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-csv-'));
+  const caminho = salvarCsv(conteudo, path.join(dir, nome));
+  return { caminho, remover: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
 /** Nome de arquivo único por execução: o servidor de teste é compartilhado. */
 function nomeUnico(prefixo) {
   return `${prefixo}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.csv`;
@@ -92,4 +106,14 @@ function sha256(conteudo) {
   return crypto.createHash('sha256').update(conteudo).digest('hex');
 }
 
-module.exports = { escaparCampo, paraCsv, gerarRegistros, gerarCsv, salvarCsv, nomeUnico, sha256, DEFEITOS };
+module.exports = {
+  escaparCampo,
+  paraCsv,
+  gerarRegistros,
+  gerarCsv,
+  salvarCsv,
+  arquivoTemporario,
+  nomeUnico,
+  sha256,
+  DEFEITOS,
+};

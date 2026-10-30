@@ -1,7 +1,7 @@
 /**
- * Validador de importação de CSV de clientes. Faz o papel do "importador"
- * descrito no enunciado (o the-internet só recebe o arquivo, não o interpreta)
- * e aplica as quatro camadas de validação pedidas:
+ * Regras de importação de CSV de clientes, usadas pelo servidor do importador
+ * (server.js) e pelos testes unitários. Aplica as quatro camadas de validação
+ * descritas no enunciado:
  *
  *  1. Formato        - encoding UTF-8, arquivo não vazio, cabeçalho, nº de colunas, aspas
  *  2. Regra de negócio - nome obrigatório, e-mail válido, idade inteira entre 0 e 120
@@ -33,6 +33,9 @@ const CODIGOS = {
   IDADE_INVALIDA: 'IDADE_INVALIDA',
   EMAIL_DUPLICADO: 'EMAIL_DUPLICADO',
   CIDADE_INEXISTENTE: 'CIDADE_INEXISTENTE',
+  // Aplicados pelo servidor (server.js), que conhece a base e o tamanho do upload
+  EMAIL_JA_CADASTRADO: 'EMAIL_JA_CADASTRADO',
+  ARQUIVO_GRANDE: 'ARQUIVO_GRANDE',
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -101,17 +104,22 @@ function parseCsv(texto, separador = ',') {
 /**
  * @param {Buffer | string} conteudo
  * @returns {{ valido: boolean, totalRegistros: number, registrosValidos: number,
- *             erros: { linha: number, codigo: string, mensagem: string }[] }}
+ *             erros: { linha: number, codigo: string, mensagem: string }[],
+ *             registros: { linha: number, nome: string, email: string, idade: number, cidade: string }[] }}
+ *          `registros` traz só as linhas sem erro, já convertidas.
  */
 function validarCsv(conteudo) {
   /** @type {{ linha: number, codigo: string, mensagem: string }[]} */
   const erros = [];
   const erro = (linha, codigo, mensagem) => erros.push({ linha, codigo, mensagem });
-  const resultado = (totalRegistros = 0, registrosValidos = 0) => ({
+  /** @type {{ linha: number, nome: string, email: string, idade: number, cidade: string }[]} */
+  const validos = [];
+  const resultado = (totalRegistros = 0) => ({
     valido: erros.length === 0,
     totalRegistros,
-    registrosValidos,
+    registrosValidos: validos.length,
     erros,
+    registros: validos,
   });
 
   const buffer = Buffer.isBuffer(conteudo) ? conteudo : Buffer.from(conteudo, 'utf8');
@@ -154,7 +162,6 @@ function validarCsv(conteudo) {
   }
 
   const emails = new Map();
-  let registrosValidos = 0;
 
   for (const { linha, campos } of linhas) {
     const errosAntes = erros.length;
@@ -185,14 +192,14 @@ function validarCsv(conteudo) {
       erro(linha, CODIGOS.CIDADE_INEXISTENTE, `Cidade não cadastrada: "${cidade}"`);
     }
 
-    if (erros.length === errosAntes) registrosValidos++;
+    if (erros.length === errosAntes) validos.push({ linha, nome, email, idade: Number(idade), cidade });
   }
 
   if (erroAspas) {
     erro(erroAspas.linha, CODIGOS.ASPAS_NAO_FECHADAS, 'Aspas abertas e não fechadas até o fim do arquivo');
   }
 
-  return resultado(linhas.length, registrosValidos);
+  return resultado(linhas.length);
 }
 
 module.exports = { CABECALHO, CIDADES_CADASTRADAS, CODIGOS, parseCsv, validarCsv };

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Importação de clientes</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2328; }
+    table { border-collapse: collapse; margin-top: 1rem; }
+    th, td { border: 1px solid #d0d7de; padding: .25rem .5rem; text-align: left; }
+    [role="status"] { margin-top: 1rem; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Importação de clientes</h1>
+  <p>Layout: <code>nome,email,idade,cidade</code> (UTF-8). Arquivos com qualquer erro são rejeitados por inteiro.</p>
+
+  <label for="arquivo">Arquivo CSV</label>
+  <input id="arquivo" type="file" accept=".csv,text/csv">
+  <button id="importar" type="button">Importar</button>
+
+  <div role="status" id="resultado"></div>
+
+  <table aria-label="Erros da importação" id="erros" hidden>
+    <thead><tr><th>Linha</th><th>Código</th><th>Mensagem</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const loja = new URLSearchParams(location.search).get('loja') || 'padrao';
+    const resultado = document.getElementById('resultado');
+    const tabela = document.getElementById('erros');
+
+    document.getElementById('importar').addEventListener('click', async () => {
+      const arquivo = document.getElementById('arquivo').files[0];
+      tabela.hidden = true;
+      tabela.tBodies[0].replaceChildren();
+      if (!arquivo) {
+        resultado.textContent = 'Selecione um arquivo CSV.';
+        return;
+      }
+
+      resultado.textContent = 'Importando...';
+      const resposta = await fetch(`/api/lojas/${encodeURIComponent(loja)}/importacoes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/csv' },
+        body: arquivo,
+      });
+      const corpo = await resposta.json();
+
+      if (resposta.ok) {
+        resultado.textContent = `${corpo.importados} registros importados`;
+        return;
+      }
+      resultado.textContent = `Arquivo rejeitado: ${corpo.erros.length} erro(s)`;
+      for (const { linha, codigo, mensagem } of corpo.erros) {
+        const tr = tabela.tBodies[0].insertRow();
+        for (const valor of [linha, codigo, mensagem]) tr.insertCell().textContent = valor;
+      }
+      tabela.hidden = false;
+    });
+  </script>
+</body>
+</html>

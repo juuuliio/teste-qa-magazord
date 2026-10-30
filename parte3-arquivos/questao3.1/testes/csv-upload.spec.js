@@ -1,10 +1,10 @@
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { test: base, expect } = require('@playwright/test');
 const { UploadPage } = require('./pages/upload-page');
-const { gerarCsv, gerarRegistros, paraCsv, salvarCsv, nomeUnico, sha256 } = require('./utils/csv-generator');
-const { validarCsv, parseCsv, CODIGOS } = require('./utils/csv-validator');
+const { gerarCsv, gerarRegistros, paraCsv, arquivoTemporario, nomeUnico, sha256 } = require('./utils/csv-generator');
+const { validarCsv, parseCsv, CODIGOS } = require('../importador/csv-validator');
+const { CASOS_INVALIDOS } = require('./fixtures/casos-invalidos');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
@@ -22,12 +22,8 @@ const test = base.extend({
  * @param {import('@playwright/test').TestInfo} testInfo
  */
 async function enviarEConferirIntegridade(uploadPage, conteudo, nome, testInfo) {
-  // O arquivo a enviar fica num diretório temporário curto, não em test-results:
-  // no Windows, com o projeto numa pasta funda, o caminho em test-results passa
-  // de 260 caracteres e o Chromium não consegue ler o arquivo (o upload trava).
-  // Uma cópia vai anexada ao relatório como evidência.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-csv-'));
-  const caminho = salvarCsv(conteudo, path.join(dir, nome));
+  // Caminho curto (ver arquivoTemporario); uma cópia vai anexada ao relatório.
+  const { caminho, remover } = arquivoTemporario(conteudo, nome);
   try {
     await uploadPage.goto();
     const response = await uploadPage.enviar(caminho);
@@ -42,7 +38,7 @@ async function enviarEConferirIntegridade(uploadPage, conteudo, nome, testInfo) 
     return armazenado;
   } finally {
     await testInfo.attach(nome, { path: caminho, contentType: 'text/csv' });
-    fs.rmSync(dir, { recursive: true, force: true });
+    remover();
   }
 }
 
@@ -87,56 +83,17 @@ test.describe('Upload de CSV válido', () => {
 });
 
 /*
- * O the-internet não interpreta o conteúdo: aceita qualquer arquivo. Cada teste
- * tem duas etapas: (1) o upload, que comprova que o arquivo chega ao servidor
- * sem alteração; (2) a importação, em que o validador (utils/csv-validator.js),
- * no papel do importador, rejeita o arquivo apontando erro e linha.
+ * O the-internet não interpreta o conteúdo: aceita qualquer arquivo. Aqui cada
+ * teste comprova (1) que o arquivo inválido chega íntegro ao servidor e (2) que
+ * as regras de importação apontam o erro e a linha. A rejeição feita pelo
+ * servidor do importador (tela + HTTP 422 + base sem alteração) está em
+ * csv-importacao.spec.js (CT-ARQ-13), com os mesmos arquivos.
  */
 test.describe('Upload de CSV inválido', () => {
-  const invalidos = [
-    {
-      id: 'CT-ARQ-03',
-      descricao: 'CSV vazio (0 bytes)',
-      arquivo: 'vazio.csv',
-      erros: [{ linha: 0, codigo: CODIGOS.ARQUIVO_VAZIO }],
-    },
-    {
-      id: 'CT-ARQ-04',
-      descricao: 'CSV só com cabeçalho',
-      arquivo: 'somente-cabecalho.csv',
-      erros: [{ linha: 1, codigo: CODIGOS.SEM_REGISTROS }],
-    },
-    {
-      id: 'CT-ARQ-05',
-      descricao: 'CSV com formato incorreto (separador ";" e cabeçalho diferente)',
-      arquivo: 'formato-incorreto.csv',
-      erros: [{ linha: 1, codigo: CODIGOS.CABECALHO_INVALIDO }],
-    },
-    {
-      id: 'CT-ARQ-06',
-      descricao: 'CSV com dados malformados',
-      arquivo: 'dados-malformados.csv',
-      erros: [
-        { linha: 3, codigo: CODIGOS.COLUNAS },
-        { linha: 4, codigo: CODIGOS.EMAIL_INVALIDO },
-        { linha: 5, codigo: CODIGOS.IDADE_INVALIDA },
-        { linha: 6, codigo: CODIGOS.IDADE_INVALIDA },
-        { linha: 7, codigo: CODIGOS.NOME_OBRIGATORIO },
-        { linha: 8, codigo: CODIGOS.EMAIL_DUPLICADO },
-        { linha: 9, codigo: CODIGOS.CIDADE_INEXISTENTE },
-        { linha: 10, codigo: CODIGOS.ASPAS_NAO_FECHADAS },
-      ],
-    },
-    {
-      id: 'CT-ARQ-07',
-      descricao: 'CSV corrompido (conteúdo binário)',
-      arquivo: 'corrompido.csv',
-      erros: [{ linha: 0, codigo: CODIGOS.ENCODING_INVALIDO }],
-    },
-  ];
+  const ids = ['CT-ARQ-03', 'CT-ARQ-04', 'CT-ARQ-05', 'CT-ARQ-06', 'CT-ARQ-07'];
 
-  for (const { id, descricao, arquivo, erros } of invalidos) {
-    test(`${id} - ${descricao}: site aceita o upload; validador local (importador) rejeita com erro e linha`, async ({
+  for (const [i, { descricao, arquivo, erros }] of CASOS_INVALIDOS.entries()) {
+    test(`${ids[i]} - ${descricao}: the-internet recebe íntegro; regras de importação apontam erro e linha`, async ({
       uploadPage,
     }, testInfo) => {
       const conteudo = fs.readFileSync(path.join(FIXTURES, arquivo));
@@ -145,7 +102,7 @@ test.describe('Upload de CSV inválido', () => {
         await enviarEConferirIntegridade(uploadPage, conteudo, nomeUnico(path.parse(arquivo).name), testInfo);
       });
 
-      await test.step(`Validador local (csv-validator.js) rejeita: ${erros.map((e) => e.codigo).join(', ')}`, async () => {
+      await test.step(`Regras de importação (importador/csv-validator.js): ${erros.map((e) => e.codigo).join(', ')}`, async () => {
         const validacao = validarCsv(conteudo);
         expect(validacao.valido).toBe(false);
         expect(validacao.erros.map(({ linha, codigo }) => ({ linha, codigo }))).toEqual(erros);

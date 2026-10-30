@@ -2,4 +2,4 @@
 
 # Fixtures de CSV são comparadas byte a byte (SHA-256) e incluem um arquivo binário:
 # o Git não pode converter quebras de linha nem encoding.
-parte3-arquivos/**/fixtures/* -text
+parte3-arquivos/**/fixtures/*.csv -text

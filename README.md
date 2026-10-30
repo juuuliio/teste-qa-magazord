@@ -4,7 +4,7 @@ Teste técnico para a vaga de **Coordenador de Qualidade - Magazord**, com autom
 
 ## Tecnologias Utilizadas
 
-- Node.js v20.19+ (testado com v22 e v26). Node 18 não é suportado, ver [Limitações conhecidas](#limitações-conhecidas)
+- Node.js v20.19+ (testado com v22 e v26), ver [Pré-requisitos e efeitos da execução](#pré-requisitos-e-efeitos-da-execução)
 - Playwright 1.x (`@playwright/test` 1.64): testes de API (`APIRequestContext`) e E2E (Chromium)
 - @faker-js/faker 10 (locale pt_BR): massa de dados dinâmica e reproduzível por semente
 - dotenv: configuração opcional via `.env`
@@ -54,7 +54,7 @@ FAKER_SEED=123456 npm run test:parte2   # reproduz a massa de uma execução (se
 ### Resultado esperado
 
 ```text
-  41 passed
+  50 passed        (npm run test:ci: 49, sem o CT-API-05)
 ```
 
 Nenhum teste é pulado, com uma exceção externa (a cota diária do ReqRes, logo abaixo):
@@ -66,7 +66,7 @@ Nenhum teste é pulado, com uma exceção externa (a cota diária do ReqRes, log
 
 > **Atenção:** o `npm test` inclui o **CT-API-05**, que esgota de propósito a cota anônima do GitHub (60 req/h) do seu IP, como pede o enunciado (detectar o 403 em `GET /users/github`). Depois dele, outras chamadas anônimas à API do GitHub a partir do mesmo IP ficam bloqueadas por até 1h. Para rodar sem esse efeito: `npm run test:ci`.
 
-A suíte leva **pouco mais de 2 minutos**. Quase todo esse tempo vem de dois testes da Parte 1 que esperam o tempo real (reset da cota de busca do GitHub e expiração de um token de 1 minuto). As Partes 2 e 3 rodam em paralelo em cerca de 20 s.
+A suíte leva **pouco mais de 2 minutos**. Quase todo esse tempo vem de dois testes da Parte 1 que esperam o tempo real (reset da cota de busca do GitHub e expiração de um token de 1 minuto). As Partes 2 e 3 rodam em paralelo em cerca de 30 s.
 
 ## Estrutura do Projeto
 
@@ -97,12 +97,17 @@ A suíte leva **pouco mais de 2 minutos**. Quase todo esse tempo vem de dois tes
 │
 ├── parte3-arquivos/questao3.1/
 │   ├── RESPOSTA_TEORICA.md
+│   ├── importador/                 # Sistema testado: importador de clientes (Node puro, sobe sozinho)
+│   │   ├── server.js               # API de importação (201/422/413), base por loja, tudo ou nada
+│   │   ├── index.html              # Tela de importação
+│   │   └── csv-validator.js        # Regras: formato, negócio, duplicata, relacionamento
 │   └── testes/
-│       ├── csv-upload.spec.js
-│       ├── pages/upload-page.js    # Page Object do upload + download do arquivo gravado
+│       ├── csv-upload.spec.js      # Upload no the-internet: válidos, inválidos, integridade (SHA-256)
+│       ├── csv-importacao.spec.js  # Importação no importador: rejeição pelo servidor e reconciliação
+│       ├── pages/                  # upload-page.js (the-internet) e importador-page.js
 │       ├── utils/csv-generator.js  # Gerador de CSV (10/100/1000+ linhas, injeção de defeitos)
-│       ├── utils/csv-validator.js  # Regras do "importador": formato, negócio, duplicata, relacionamento
-│       └── fixtures/               # válido, vazio, só cabeçalho, formato incorreto, malformado, corrompido
+│       └── fixtures/               # CSVs válido/vazio/só cabeçalho/formato incorreto/malformado/corrompido
+│                                   # + casos-invalidos.js (erros esperados de cada um)
 │
 ├── parte4-mobile/questao4.1/RESPOSTA_TEORICA.md
 └── parte5-mocks/questao5.1/RESPOSTA_TEORICA.md
@@ -141,14 +146,13 @@ Como ficou a cobertura:
 - **fluxo literal do enunciado** (CT-API-11): roda sempre e registra a recusa atual como evidência da mudança de contrato;
 - **DummyJSON** (troca de API permitida pelo enunciado): login, **reuso do token em requisição autenticada** (CT-API-12 e 13) e **expiração real** (CT-API-15). O `/auth/login` aceita `expiresInMins`, emite JWT de verdade e responde `401 Token Expired!` quando ele vence. O `TokenManager` é o mesmo para as duas APIs (a função de login é injetada).
 
-**Parte 2 - Cupom e e-mail.** O SauceDemo não tem cupom nem envia e-mail; a estratégia para os dois está em [`RESPOSTA_TEORICA.md`](parte2-e2e/questao2.1/RESPOSTA_TEORICA.md). A massa (nome, sobrenome, CEP e produtos) é gerada a cada execução, e a **semente** fica anotada no relatório (`faker-seed`) para reproduzir uma falha.
+**Parte 2 - Cupom e e-mail.** Os itens "Implemente" da Parte 2 são login, produtos, checkout, dados dinâmicos, confirmação e limpeza, e todos estão automatizados. Cupom e e-mail aparecem só no contexto e nas perguntas teóricas (o SauceDemo não tem nenhum dos dois); a estratégia para ambos está em [`RESPOSTA_TEORICA.md`](parte2-e2e/questao2.1/RESPOSTA_TEORICA.md). A massa (nome, sobrenome, CEP e produtos) é gerada a cada execução, e a **semente** fica anotada no relatório (`faker-seed`) para reproduzir uma falha.
 
 **Parte 2 - Limpeza.** O Playwright já isola cada teste num contexto novo. Ainda assim, o `afterEach` limpa cookies, `localStorage` e `sessionStorage` explicitamente, e o CT-E2E-08 testa a própria limpeza (estado presente antes, ausente depois, área logada volta a exigir login).
 
-**Parte 3 - O the-internet não valida conteúdo.** O site aceita qualquer arquivo, inclusive vazio ou binário (só o envio sem arquivo gera erro: HTTP 500). Para não fingir uma validação que o site não faz:
-- as regras de importação (formato, negócio, duplicata, relacionamento) estão em `csv-validator.js`, que faz o papel do importador, e os testes comparam **erro e linha exatos**;
-- todo upload é verificado **de ponta a ponta**: o arquivo é baixado de `/download/<nome>` e comparado por SHA-256 com o enviado, e o conteúdo baixado é revalidado (as 1000 linhas chegaram e continuam válidas);
-- os nomes de arquivo são únicos por execução, porque o servidor é público e compartilhado.
+**Parte 3 - Upload no the-internet + importador de referência.** O the-internet (site pedido) aceita qualquer arquivo, inclusive vazio ou binário, e não importa nada: só o envio sem arquivo gera erro (HTTP 500). O contexto da questão, porém, é um **sistema que importa** CSV e valida formato, regras, duplicatas e relacionamentos. Por isso a Parte 3 tem duas frentes:
+- **the-internet** (`csv-upload.spec.js`): upload de arquivos válidos e inválidos, como o enunciado pede. Todo upload é verificado de ponta a ponta: o arquivo é baixado de `/download/<nome>` e comparado por SHA-256 com o enviado. Os nomes são únicos por execução, porque o servidor é público e compartilhado.
+- **importador de referência** (`importador/`, testado em `csv-importacao.spec.js`): um servidor Node sem dependências, que o Playwright sobe sozinho (`webServer`), com tela de importação, API e base de dados por loja. Aqui a **rejeição é feita pelo servidor**: HTTP 422 com erro e linha, tabela de erros na tela e base conferida pela API, que deve continuar vazia (política tudo ou nada). Também cobre o que o the-internet não permite: reconciliação das 1000 linhas gravadas campo a campo, duplicata contra registros já importados e limite de tamanho (HTTP 413).
 
 ### Defeito encontrado
 
@@ -165,18 +169,22 @@ Preferi isso a `test.fail()`, porque o `test.fail()` aceita *qualquer* falha com
 - **Dependência de serviços públicos:** GitHub, ReqRes, DummyJSON, SauceDemo e the-internet podem ficar instáveis ou aplicar limites (a cota anônima do ReqRes é de 40 requisições por dia por IP). No CI uso `retries: 1` e publico trace e relatório para diagnóstico. Numa suíte de produto, esses serviços seriam substituídos por mocks na maior parte dos testes (ver Parte 5).
 - **Vulnerabilidade no Faker 9** (GHSA-qxc2-j82w-r537, em `helpers.fake`): mesmo sem usar essa função, atualizei para o Faker 10.6 para o `npm install` sair limpo (`found 0 vulnerabilities`). O Faker 10 é distribuído só como ESM, então o Node mínimo é 20.19. O `.npmrc` (`engine-strict=true`) faz o `npm install` falhar com mensagem clara em versões anteriores. Validado no Node 22 (versão do CI) e no 26.
 
-### Limitações conhecidas
+### Adaptação ao enunciado
 
-Resumo do que **não** é validado exatamente como o enunciado descreve, e por quê:
+Todos os itens "Implemente" das partes 1, 2 e 3 estão automatizados. Só um deles precisou de API alternativa, por mudança no serviço sugerido:
 
-| Ponto | O que acontece | Como foi tratado |
+| Item | O que mudou no serviço | Como foi coberto |
 |---|---|---|
-| Token do ReqRes em requisição autenticada | O ReqRes recusa `Bearer` em `/api/*` (401 `missing_api_key`) e não usa o token do login para autenticar nada | CT-API-11 executa o fluxo literal e registra a recusa; o reuso e a expiração real do token são provados no **DummyJSON** (CT-API-12 a 15) |
-| Rejeição de CSV inválido | O the-internet **aceita qualquer arquivo**; não existe importador no servidor | A rejeição é feita por um **componente local** (`csv-validator.js`), no papel do importador. O site só comprova que o arquivo chega íntegro (SHA-256). Os títulos dos testes CT-ARQ-03 a 07 deixam isso explícito |
-| Cupom de uso único e e-mail de confirmação | O SauceDemo não tem nenhum dos dois | Estratégia descrita em [2.1.a e 2.1.b](parte2-e2e/questao2.1/RESPOSTA_TEORICA.md) |
-| Cota anônima do ReqRes (40 req/dia por IP) | Depois de ~4 execuções no mesmo dia, o ReqRes responde 429 | CT-API-07 a 11 são pulados com motivo e horário de reset (não falham); `REQRES_API_KEY` de conta gratuita aumenta a cota |
-| CT-API-05 esgota a cota real do GitHub | A cota anônima do IP fica bloqueada por até 1h | Roda no `npm test` (requisito do enunciado); no CI de push/PR fica de fora (`npm run test:ci`) e roda no job agendado/manual |
-| Node 18 | O modelo de README do enunciado cita "Node.js v18+", mas o Node 18 está fora de suporte desde abril/2025 e o Playwright atual (1.64) exige Node 20 | `engines` exige 20.19+ (por causa do Faker 10, que é só ESM); o `.npmrc` faz o `npm install` falhar com mensagem clara em versões anteriores |
+| Login no ReqRes e reuso do token em requisição autenticada | O ReqRes passou a recusar `Bearer` em `/api/*` (401 `missing_api_key`), e o token do login não autentica nada (a mesma chamada sem token responde 200) | CT-API-11 executa o fluxo literal no ReqRes e registra a recusa; login, reuso do token e expiração real são provados no **DummyJSON** (CT-API-12 a 15), troca permitida pelo enunciado ("fique à vontade para utilizar outro") |
+
+### Pré-requisitos e efeitos da execução
+
+| Ponto | Detalhe |
+|---|---|
+| Node.js 20.19+ | O modelo de README do enunciado cita "v18+"; o Node 22 atende. O Node 18 está fora de suporte desde abril/2025 e o Playwright atual (1.64) exige Node 20. O `.npmrc` faz o `npm install` falhar com mensagem clara em versões anteriores |
+| Cota anônima do ReqRes (40 req/dia por IP) | A suíte usa cerca de 10 por execução. Esgotada, o ReqRes responde 429 e os CT-API-07 a 11 são pulados com motivo e horário de reset (não falham). `REQRES_API_KEY` de conta gratuita aumenta a cota |
+| CT-API-05 esgota a cota real do GitHub | É o que o enunciado pede (detectar o 403). A cota anônima do IP fica bloqueada por até 1h. No CI de push/PR fica de fora (`npm run test:ci`) e roda no job agendado/manual |
+| Porta 3333 livre | Usada pelo importador da Parte 3, que o Playwright sobe sozinho. Para trocar: `IMPORTADOR_PORT` |
 
 ### Variáveis opcionais
 
@@ -186,3 +194,4 @@ Resumo do que **não** é validado exatamente como o enunciado descreve, e por q
 | `REQRES_API_KEY` | Chave pessoal do ReqRes (`x-api-key`), em vez da cota demo compartilhada |
 | `TOKEN_TTL_MS` | TTL simulado do token do ReqRes (padrão 120000 = 2 min) |
 | `FAKER_SEED` | Reproduz a massa de dados da Parte 2 |
+| `IMPORTADOR_PORT` | Porta do importador da Parte 3 (padrão 3333) |

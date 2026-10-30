@@ -11,7 +11,7 @@ Convenções
 Resumo
   Parte 1 - API ............ 15 casos (17 execuções)
   Parte 2 - E2E ............  9 casos (11 execuções; CT-E2E-06 documenta um defeito do SauceDemo)
-  Parte 3 - Arquivos ....... 11 casos (13 execuções)
+  Parte 3 - Arquivos ....... 16 casos (22 execuções)
 
 Rastreabilidade com o enunciado (itens "Implemente")
   Parte 1  Headers de rate limit (X-RateLimit-*) ........... CT-API-01 (+ CT-API-02, 03)
@@ -26,6 +26,9 @@ Rastreabilidade com o enunciado (itens "Implemente")
            Upload de arquivo válido ........................ CT-ARQ-01, 02
            Upload inválido: vazio / formato / malformado ... CT-ARQ-03, 05, 06 (+ 04, 07, 08)
            Validação de upload bem-sucedido ............... CT-ARQ-01, 02 (mensagem + download + SHA-256)
+           Contexto (importação com validação de formato,
+           regras, duplicatas e relacionamentos) .......... CT-ARQ-12 a 16 (importador: rejeição pelo
+                                                            servidor, reconciliação das 1000 linhas)
 
 
 ===============================================================================
@@ -227,9 +230,11 @@ CT-E2E-09 | Massa de dados dinâmica e reproduzível
 
 
 ===============================================================================
- PARTE 3 - ARQUIVOS  (parte3-arquivos/questao3.1/testes/csv-upload.spec.js)
+ PARTE 3 - ARQUIVOS
+   CT-ARQ-01 a 11: parte3-arquivos/questao3.1/testes/csv-upload.spec.js (the-internet)
+   CT-ARQ-12 a 16: parte3-arquivos/questao3.1/testes/csv-importacao.spec.js (importador)
 ===============================================================================
-Regras do importador (utils/csv-validator.js):
+Regras do importador (importador/csv-validator.js, aplicadas pelo importador/server.js):
   Formato: UTF-8, não vazio, cabeçalho exato "nome,email,idade,cidade", 4 colunas, aspas balanceadas
   Negócio: nome obrigatório; e-mail válido; idade inteira de 0 a 120
   Duplicata: e-mail único no arquivo (sem diferenciar maiúsculas)
@@ -246,12 +251,12 @@ CT-ARQ-02 | CSV de exemplo com casos de borda é aceito
   Dados: nome com vírgula entre aspas, aspas escapadas (""), acentos, idades 0 e 120.
   Esperado: 10 registros válidos; upload íntegro.
 
-CT-ARQ-03 a 07: IMPORTANTE: a rejeição é validada por um COMPONENTE LOCAL
-(utils/csv-validator.js, no papel do importador), não pelo servidor: o
-the-internet aceita qualquer arquivo e não tem importador. Cada teste tem duas
-etapas (test.step) no relatório:
+CT-ARQ-03 a 07: o the-internet aceita qualquer arquivo e não importa nada.
+Cada teste tem duas etapas (test.step) no relatório:
   1) Upload: o site aceita e grava o arquivo íntegro (SHA-256 do download = enviado);
-  2) Validador local: rejeita com os erros e linhas abaixo.
+  2) Regras de importação: apontam os erros e linhas abaixo.
+A rejeição desses mesmos arquivos PELO SERVIDOR do importador (HTTP 422, tela
+e base) é o CT-ARQ-13.
 
 CT-ARQ-03 | CSV vazio (0 bytes)
   Tipo/Prioridade: Negativo / Alta
@@ -295,6 +300,43 @@ CT-ARQ-11 | Round-trip de campos especiais
   Dados: nome com vírgula, aspas e quebra de linha.
   Esperado: parser devolve o valor original e o arquivo é válido.
 
+--- Importador de clientes (importador/server.js) -----------------------------
+Sistema de referência que faz o que o contexto descreve (importar e validar).
+Sobe automaticamente com os testes (webServer do Playwright, porta 3333).
+API: POST /api/lojas/:loja/importacoes (201 | 422 | 413) e GET /api/lojas/:loja/clientes.
+Política tudo ou nada: qualquer erro rejeita o arquivo inteiro e nada é gravado.
+Cada teste usa uma loja nova (base vazia), o que permite execução em paralelo.
+
+CT-ARQ-12 | Importação de 1000 linhas e reconciliação com a base
+  Tipo/Prioridade: Positivo / Alta
+  Passos: gerar 1000 registros; importar pela tela; consultar a base pela API.
+  Esperado: HTTP 201; tela "1000 registros importados"; a base tem exatamente
+            1000 registros, iguais campo a campo aos do arquivo (por e-mail).
+
+CT-ARQ-13 | Arquivo inválido rejeitado pelo servidor (5 variações: vazio, só
+            cabeçalho, formato incorreto, malformado, corrompido)
+  Tipo/Prioridade: Negativo / Alta
+  Esperado: HTTP 422; tela "Arquivo rejeitado: N erro(s)" e tabela com as mesmas
+            linhas e códigos do CT-ARQ-03 a 07; API devolve status "rejeitado",
+            os erros e uma mensagem legível para cada um; base continua vazia.
+
+CT-ARQ-14 | Um erro em 1000 linhas rejeita o arquivo inteiro
+  Tipo/Prioridade: Negativo / Alta
+  Dados: 1000 registros válidos, cidade inexistente no registro 734 (linha 735).
+  Esperado: HTTP 422 com um único erro (linha 735, CIDADE_INEXISTENTE); nenhuma
+            das 999 linhas válidas é gravada.
+
+CT-ARQ-15 | Reimportação do mesmo arquivo (duplicata contra a base)
+  Tipo/Prioridade: Negativo / Alta
+  Passos: importar 10 registros (201); importar o mesmo arquivo de novo.
+  Esperado: HTTP 422 com EMAIL_JA_CADASTRADO nas linhas 2 a 11; a base continua
+            com 10 registros (nada duplicado).
+
+CT-ARQ-16 | Arquivo acima do limite de 2 MB
+  Tipo/Prioridade: Negativo / Média
+  Dados: CSV válido com 60.000 linhas (> 2 MB).
+  Esperado: HTTP 413, erro ARQUIVO_GRANDE na tela, base vazia.
+
 
 ===============================================================================
  CENÁRIOS IDENTIFICADOS E NÃO AUTOMATIZADOS (com justificativa)
@@ -308,5 +350,5 @@ CT-ARQ-11 | Round-trip de campos especiais
 - Outros usuários do SauceDemo (problem_user, performance_glitch_user, error_user):
   bons candidatos para testes de regressão visual e de performance, fora do escopo pedido.
 - Concorrência no rate limit (N requisições simultâneas): pertence a teste de carga (k6), não à suíte funcional.
-- Arquivo acima do tamanho máximo e CSV injection (=HYPERLINK...): o the-internet
-  não tem limite nem processamento; descritos em 3.1.b.
+- CSV injection (=HYPERLINK...): depende de como o sistema real exporta os
+  dados depois (planilha); descrito em 3.1.b.
